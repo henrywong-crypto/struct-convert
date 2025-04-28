@@ -356,6 +356,29 @@ fn main() {
 
 ```
 
+Implement `From` on remote type.
+
+```rust
+use struct_convert::Convert;
+
+#[derive(Convert)]
+#[convert(from_on = "remote::B")]
+pub struct A {
+    i: i64,
+}
+
+pub mod remote {
+    pub struct B {
+        pub i: i64,
+    }
+}
+
+fn main() {
+    let a = A { i: 0 };
+    let b = remote::B::from(a);
+}
+```
+
 More examples look [here](https://github.com/Zerounary/struct-convert/tree/main/examples).
 
 Welcome PR.
