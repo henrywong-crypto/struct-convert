@@ -2,6 +2,7 @@ use darling::{util::SpannedValue, FromAttributes, FromDeriveInput, ToTokens};
 use itertools::Itertools;
 use proc_macro2::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
 use quote::{quote, quote_spanned};
+use std::collections::HashMap;
 
 use syn::{
     braced, bracketed, parenthesized,
@@ -34,6 +35,8 @@ struct FiledOpts {
     unwrap: bool,
     option: bool,
     to_string: bool,
+    nested_field: String,
+    nested_type: String,
 }
 
 #[derive(Clone, Debug)]
@@ -309,84 +312,119 @@ impl DeriveIntoContext {
 
     // 比如：#field_name: self.#field_name.take().ok_or(" xxx need to be set!")
     fn gen_into_assigns(&self, struct_name: String) -> Vec<TokenStream> {
-        self.fields
-            .clone()
-            .into_iter()
-            .map(|fd| {
-                let Fd {
-                    name,
-                    optional,
-                    is_vec,
-                    default_opts: _opts,
-                    ..
-                } = fd.clone();
+        let mut regular_fields = Vec::new();
+        let mut nested_fields: HashMap<String, (String, Vec<(Ident, TokenStream)>)> =
+            HashMap::new();
 
-                let opts = fd
-                    .get_by_name(FieldClass::Into(struct_name.clone()))
-                    .unwrap_or(fd.default_opts);
+        // First pass: collect all fields and separate regular from nested
+        for fd in &self.fields {
+            let Fd {
+                name,
+                optional,
+                is_vec,
+                default_opts: _opts,
+                ..
+            } = fd.clone();
 
-                let target_name: Ident = if opts.rename.is_empty() {
-                    name.clone()
+            let opts = fd
+                .get_by_name(FieldClass::Into(struct_name.clone()))
+                .unwrap_or(fd.default_opts.clone());
+
+            if opts.ignore {
+                continue;
+            }
+
+            let target_name: Ident = if opts.rename.is_empty() {
+                name.clone()
+            } else {
+                Ident::new(opts.rename.as_str(), name.span())
+            };
+
+            let field_assignment = if !opts.custom_fn.is_empty() {
+                let custom_fn = parse_custom_fn_to_token_stream(
+                    name.clone(),
+                    opts.custom_fn.as_str(),
+                    opts.custom_fn.span(),
+                );
+                custom_fn
+            } else if optional && opts.unwrap {
+                quote! { this.#name.unwrap_or_default() }
+            } else if opts.option {
+                if optional {
+                    quote! { this.#name }
                 } else {
-                    Ident::new(opts.rename.as_str(), name.span())
+                    quote! { Some(this.#name) }
+                }
+            } else if optional {
+                quote! { this.#name.map(Into::into) }
+            } else if opts.to_string {
+                quote! { this.#name.to_string() }
+            } else if is_vec {
+                quote! { this.#name.into_iter().map(|a| a.into()).collect() }
+            } else {
+                quote! { this.#name.into() }
+            };
+
+            if !opts.nested_field.is_empty() {
+                // Parse nested_field to extract field name and optional type
+                let (field_name, type_name) = if opts.nested_field.contains(':') {
+                    let parts: Vec<&str> = opts.nested_field.splitn(2, ':').collect();
+                    (parts[0].to_string(), parts[1].to_string())
+                } else if !opts.nested_type.is_empty() {
+                    (opts.nested_field.clone(), opts.nested_type.clone())
+                } else {
+                    // Fallback to simple capitalization heuristic
+                    let mut chars: Vec<char> = opts.nested_field.chars().collect();
+                    if !chars.is_empty() {
+                        chars[0] = chars[0].to_uppercase().next().unwrap_or(chars[0]);
+                    }
+                    let inferred_type = chars.into_iter().collect::<String>();
+                    (opts.nested_field.clone(), inferred_type)
                 };
 
-                if !opts.custom_fn.is_empty() {
-                    let custom_fn = parse_custom_fn_to_token_stream(
-                        name.clone(),
-                        opts.custom_fn.as_str(),
-                        opts.custom_fn.span(),
-                    );
-                    return quote! {
-                        #target_name: #custom_fn,
-                    };
-                }
+                // This field should be nested
+                nested_fields
+                    .entry(field_name.clone())
+                    .or_insert_with(|| (type_name, Vec::new()))
+                    .1
+                    .push((target_name, field_assignment));
+            } else {
+                // Regular field
+                regular_fields.push(quote! {
+                    #target_name: #field_assignment,
+                });
+            }
+        }
 
-                if opts.ignore {
-                    return quote!();
-                }
+        // Second pass: generate nested struct initializations
+        // Sort the nested fields by name to ensure deterministic output
+        let mut sorted_nested_fields: Vec<_> = nested_fields.into_iter().collect();
+        sorted_nested_fields.sort_by(|a, b| a.0.cmp(&b.0));
 
-                if optional && opts.unwrap {
-                    return quote! {
-                        #target_name: this.#name.unwrap_or_default(),
-                    };
-                }
+        for (nested_struct_name, (type_name, fields)) in sorted_nested_fields {
+            let nested_ident = Ident::new(&nested_struct_name, Span::call_site());
+            let struct_type_ident = Ident::new(&type_name, Span::call_site());
 
-                if opts.option {
-                    if optional {
-                        return quote! {
-                            #target_name: this.#name,
-                        };
-                    } else {
-                        return quote! {
-                            #target_name: Some(this.#name),
-                        };
+            // Create field assignments for struct literal
+            let field_assignments: Vec<TokenStream> = fields
+                .into_iter()
+                .map(|(field_name, assignment)| {
+                    quote! {
+                        #field_name: #assignment
                     }
-                }
+                })
+                .collect();
 
-                if optional {
-                    return quote! {
-                        #target_name: this.#name.map(Into::into),
-                    };
-                }
+            // Use struct literal syntax with the specified or inferred type
+            regular_fields.push(quote! {
+                #nested_ident: #struct_type_ident {
+                    #(#field_assignments,)*
+                    ..Default::default()
+                },
+            });
+        }
 
-                if opts.to_string {
-                    return quote! {
-                        #target_name: this.#name.to_string(),
-                    };
-                }
-
-                if is_vec {
-                    return quote! {
-                        #target_name: this.#name.into_iter().map(|a| a.into()).collect(),
-                    };
-                }
-
-                quote! {
-                    #target_name: this.#name.into(),
-                }
-            })
-            .collect()
+        regular_fields
     }
 }
 
