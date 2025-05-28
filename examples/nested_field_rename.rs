@@ -25,26 +25,42 @@ struct Person {
 #[convert(into = "Person")]
 struct FlatPerson {
     id: u64,
-    
+
     // Rename "given_name" to "first_name" in the nested struct
-    #[convert_field(nested_field = "info", nested_type = "PersonInfo", rename = "first_name")]
+    #[convert_field(
+        nested_field = "info",
+        nested_type = "PersonInfo",
+        rename = "first_name"
+    )]
     given_name: String,
-    
+
     // Rename "family_name" to "last_name" in the nested struct
-    #[convert_field(nested_field = "info", nested_type = "PersonInfo", rename = "last_name")]
+    #[convert_field(
+        nested_field = "info",
+        nested_type = "PersonInfo",
+        rename = "last_name"
+    )]
     family_name: String,
-    
+
     #[convert_field(nested_field = "info", nested_type = "PersonInfo")]
     age: u32,
-    
+
     // Rename "email_address" to "email" in the nested struct
-    #[convert_field(nested_field = "contact", nested_type = "ContactInfo", rename = "email")]
+    #[convert_field(
+        nested_field = "contact",
+        nested_type = "ContactInfo",
+        rename = "email"
+    )]
     email_address: String,
-    
+
     // Rename "phone_number" to "phone" in the nested struct
-    #[convert_field(nested_field = "contact", nested_type = "ContactInfo", rename = "phone")]
+    #[convert_field(
+        nested_field = "contact",
+        nested_type = "ContactInfo",
+        rename = "phone"
+    )]
     phone_number: String,
-    
+
     active: bool,
 }
 
@@ -58,11 +74,11 @@ fn main() {
         phone_number: "+1234567890".to_string(),
         active: true,
     };
-    
+
     let person: Person = flat.into();
-    
+
     println!("Converted person: {:#?}", person);
-    
+
     assert_eq!(person.id, 1);
     assert_eq!(person.info.first_name, "John");
     assert_eq!(person.info.last_name, "Doe");
@@ -83,9 +99,9 @@ fn test_nested_field_rename() {
         phone_number: "+0987654321".to_string(),
         active: false,
     };
-    
+
     let person: Person = flat.into();
-    
+
     assert_eq!(
         person,
         Person {
@@ -102,4 +118,4 @@ fn test_nested_field_rename() {
             active: false,
         }
     );
-} 
+}

@@ -25,23 +25,23 @@ struct Person {
 #[convert(into = "Person")]
 struct FlatPerson {
     id: u64,
-    
+
     // Using inline syntax with rename
     #[convert_field(nested_field = "info:PersonInfo", rename = "first_name")]
     given_name: String,
-    
+
     #[convert_field(nested_field = "info:PersonInfo", rename = "last_name")]
     family_name: String,
-    
+
     #[convert_field(nested_field = "info:PersonInfo")]
     age: u32,
-    
+
     #[convert_field(nested_field = "contact:ContactInfo", rename = "email")]
     email_address: String,
-    
+
     #[convert_field(nested_field = "contact:ContactInfo", rename = "phone")]
     phone_number: String,
-    
+
     active: bool,
 }
 
@@ -55,11 +55,11 @@ fn main() {
         phone_number: "+1234567890".to_string(),
         active: true,
     };
-    
+
     let person: Person = flat.into();
-    
+
     println!("Converted person: {:#?}", person);
-    
+
     assert_eq!(person.id, 1);
     assert_eq!(person.info.first_name, "John");
     assert_eq!(person.info.last_name, "Doe");
@@ -80,9 +80,9 @@ fn test_nested_field_rename_inline() {
         phone_number: "+0987654321".to_string(),
         active: false,
     };
-    
+
     let person: Person = flat.into();
-    
+
     assert_eq!(
         person,
         Person {
@@ -99,4 +99,4 @@ fn test_nested_field_rename_inline() {
             active: false,
         }
     );
-} 
+}

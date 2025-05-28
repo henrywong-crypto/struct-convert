@@ -55,7 +55,7 @@ impl From<Field> for Fd {
         let opts = multi_opts
             .iter()
             .find(|f| f.from.is_empty() && f.into.is_empty())
-            .map(Clone::clone)
+            .cloned()
             .unwrap_or_default();
         Self {
             // 此时，我们拿到的是 NamedFields，所以 ident 必然存在
@@ -114,7 +114,7 @@ fn parse_attrs(attrs: &[Attribute]) -> Vec<FiledOpts> {
                 result.push(f);
             }
             Err(e) => {
-                panic!("{:?}", e)
+                panic!("{e:?}")
             }
         }
     }
@@ -146,13 +146,19 @@ impl NestedStructure {
         }
     }
 
-    fn add_field(&mut self, path: Vec<NestedFieldPath>, target_name: Ident, assignment: TokenStream) {
+    fn add_field(
+        &mut self,
+        path: Vec<NestedFieldPath>,
+        target_name: Ident,
+        assignment: TokenStream,
+    ) {
         if path.is_empty() {
             return;
         }
 
         let first = &path[0];
-        let node = self.fields
+        let node = self
+            .fields
             .entry(first.field_name.clone())
             .or_insert_with(|| NestedNode {
                 type_name: first.type_name.clone(),
@@ -171,7 +177,7 @@ impl NestedStructure {
 
     fn generate_assignments(&self) -> Vec<TokenStream> {
         let mut assignments = Vec::new();
-        
+
         // Sort by field name for deterministic output
         let mut sorted_fields: Vec<_> = self.fields.iter().collect();
         sorted_fields.sort_by(|a, b| a.0.cmp(b.0));
@@ -179,9 +185,9 @@ impl NestedStructure {
         for (field_name, node) in sorted_fields {
             let field_ident = Ident::new(field_name, Span::call_site());
             let type_ident = Ident::new(&node.type_name, Span::call_site());
-            
+
             let field_assignments = node.generate_field_assignments();
-            
+
             assignments.push(quote! {
                 #field_ident: #type_ident {
                     #(#field_assignments,)*
@@ -189,19 +195,25 @@ impl NestedStructure {
                 },
             });
         }
-        
+
         assignments
     }
 }
 
 impl NestedNode {
-    fn add_nested_field(&mut self, path: &[NestedFieldPath], target_name: Ident, assignment: TokenStream) {
+    fn add_nested_field(
+        &mut self,
+        path: &[NestedFieldPath],
+        target_name: Ident,
+        assignment: TokenStream,
+    ) {
         if path.is_empty() {
             return;
         }
 
         let first = &path[0];
-        let child = self.nested_children
+        let child = self
+            .nested_children
             .entry(first.field_name.clone())
             .or_insert_with(|| NestedNode {
                 type_name: first.type_name.clone(),
@@ -218,24 +230,24 @@ impl NestedNode {
 
     fn generate_field_assignments(&self) -> Vec<TokenStream> {
         let mut assignments = Vec::new();
-        
+
         // Add direct field assignments
         for (field_name, assignment) in &self.direct_fields {
             assignments.push(quote! {
                 #field_name: #assignment
             });
         }
-        
+
         // Add nested struct assignments
         let mut sorted_children: Vec<_> = self.nested_children.iter().collect();
         sorted_children.sort_by(|a, b| a.0.cmp(b.0));
-        
+
         for (child_field_name, child_node) in sorted_children {
             let child_field_ident = Ident::new(child_field_name, Span::call_site());
             let child_type_ident = Ident::new(&child_node.type_name, Span::call_site());
-            
+
             let child_assignments = child_node.generate_field_assignments();
-            
+
             assignments.push(quote! {
                 #child_field_ident: #child_type_ident {
                     #(#child_assignments,)*
@@ -243,7 +255,7 @@ impl NestedNode {
                 }
             });
         }
-        
+
         assignments
     }
 }
@@ -253,7 +265,7 @@ fn parse_nested_field_path(nested_field: &str, nested_type: &str) -> Vec<NestedF
     if nested_field.contains('.') {
         let parts: Vec<&str> = nested_field.split('.').collect();
         let mut path = Vec::new();
-        
+
         for (i, part) in parts.iter().enumerate() {
             let (field_name, type_name) = if part.contains(':') {
                 let type_parts: Vec<&str> = part.splitn(2, ':').collect();
@@ -270,10 +282,13 @@ fn parse_nested_field_path(nested_field: &str, nested_type: &str) -> Vec<NestedF
                 let inferred_type = chars.into_iter().collect::<String>();
                 (part.to_string(), inferred_type)
             };
-            
-            path.push(NestedFieldPath { field_name, type_name });
+
+            path.push(NestedFieldPath {
+                field_name,
+                type_name,
+            });
         }
-        
+
         path
     } else {
         // Handle single level (existing behavior)
@@ -291,8 +306,11 @@ fn parse_nested_field_path(nested_field: &str, nested_type: &str) -> Vec<NestedF
             let inferred_type = chars.into_iter().collect::<String>();
             (nested_field.to_string(), inferred_type)
         };
-        
-        vec![NestedFieldPath { field_name, type_name }]
+
+        vec![NestedFieldPath {
+            field_name,
+            type_name,
+        }]
     }
 }
 
@@ -312,7 +330,7 @@ impl DeriveIntoContext {
 
         let from_code = if is_from {
             TokenStream::from_iter(self.attrs.from.iter().map(|from| {
-                let struct_name = Ident::new(&format!("{}", name), name.span());
+                let struct_name = Ident::new(&format!("{name}"), name.span());
                 let source_name = from;
                 let assigns = self.gen_from_assigns(from.to_token_stream().to_string());
 
@@ -338,7 +356,7 @@ impl DeriveIntoContext {
         };
         let into_code = if is_into {
             TokenStream::from_iter(self.attrs.into.iter().map(|into| {
-                let struct_name = Ident::new(&format!("{}", name), name.span());
+                let struct_name = Ident::new(&format!("{name}"), name.span());
                 let target_name = into;
                 let assigns = self.gen_into_assigns(into.to_token_stream().to_string());
 
@@ -366,7 +384,7 @@ impl DeriveIntoContext {
         };
         let from_on_code = if is_from_on {
             TokenStream::from_iter(self.attrs.from_on.iter().map(|remote| {
-                let struct_name = Ident::new(&format!("{}", name), name.span());
+                let struct_name = Ident::new(&format!("{name}"), name.span());
                 let target_name = remote;
                 let assigns = self.gen_into_assigns(remote.to_token_stream().to_string());
 
@@ -543,10 +561,13 @@ impl DeriveIntoContext {
                 // Parse nested_field path and validate depth
                 let nested_path = parse_nested_field_path(&opts.nested_field, &opts.nested_type);
                 if nested_path.len() > 3 {
-                    panic!("Nested field depth cannot exceed 3 levels. Found {} levels in '{}'", 
-                           nested_path.len(), opts.nested_field);
+                    panic!(
+                        "Nested field depth cannot exceed 3 levels. Found {} levels in '{}'",
+                        nested_path.len(),
+                        opts.nested_field
+                    );
                 }
-                
+
                 nested_structure.add_field(nested_path, target_name, field_assignment);
             } else {
                 // Regular field
@@ -635,7 +656,7 @@ fn parse_custom_fn_to_token_stream(field_name: Ident, custom_fn: &str, span: Spa
         return quote_spanned! { span => #_fn_(&this) };
     }
 
-    let expr = syn::parse_str::<CustomFnExpr>(&format!("{};{}", field_name, custom_fn));
+    let expr = syn::parse_str::<CustomFnExpr>(&format!("{field_name};{custom_fn}"));
     match expr {
         Ok(CustomFnExpr(_expr_)) => {
             quote_spanned! { span => #_expr_ }

@@ -25,22 +25,22 @@ struct Person {
 #[convert(into = "Person")]
 struct FlatPerson {
     id: u64,
-    
+
     #[convert_field(nested_field = "info:PersonInfo")]
     first_name: String,
-    
+
     #[convert_field(nested_field = "info:PersonInfo")]
     last_name: String,
-    
+
     #[convert_field(nested_field = "info:PersonInfo")]
     age: u32,
-    
+
     #[convert_field(nested_field = "contact:ContactInfo")]
     email: String,
-    
+
     #[convert_field(nested_field = "contact:ContactInfo")]
     phone: String,
-    
+
     active: bool,
 }
 
@@ -54,11 +54,11 @@ fn main() {
         phone: "+1234567890".to_string(),
         active: true,
     };
-    
+
     let person: Person = flat.into();
-    
+
     println!("Converted person: {:#?}", person);
-    
+
     assert_eq!(person.id, 1);
     assert_eq!(person.info.first_name, "John");
     assert_eq!(person.info.last_name, "Doe");
@@ -79,9 +79,9 @@ fn test_nested_field_inline() {
         phone: "+0987654321".to_string(),
         active: false,
     };
-    
+
     let person: Person = flat.into();
-    
+
     assert_eq!(
         person,
         Person {
@@ -98,4 +98,4 @@ fn test_nested_field_inline() {
             active: false,
         }
     );
-} 
+}
