@@ -121,6 +121,181 @@ fn parse_attrs(attrs: &[Attribute]) -> Vec<FiledOpts> {
     result
 }
 
+#[derive(Debug, Clone)]
+struct NestedFieldPath {
+    field_name: String,
+    type_name: String,
+}
+
+#[derive(Debug)]
+struct NestedStructure {
+    fields: HashMap<String, NestedNode>,
+}
+
+#[derive(Debug)]
+struct NestedNode {
+    type_name: String,
+    direct_fields: Vec<(Ident, TokenStream)>,
+    nested_children: HashMap<String, NestedNode>,
+}
+
+impl NestedStructure {
+    fn new() -> Self {
+        Self {
+            fields: HashMap::new(),
+        }
+    }
+
+    fn add_field(&mut self, path: Vec<NestedFieldPath>, target_name: Ident, assignment: TokenStream) {
+        if path.is_empty() {
+            return;
+        }
+
+        let first = &path[0];
+        let node = self.fields
+            .entry(first.field_name.clone())
+            .or_insert_with(|| NestedNode {
+                type_name: first.type_name.clone(),
+                direct_fields: Vec::new(),
+                nested_children: HashMap::new(),
+            });
+
+        if path.len() == 1 {
+            // This is a direct field of the current level
+            node.direct_fields.push((target_name, assignment));
+        } else {
+            // This needs to go deeper
+            node.add_nested_field(&path[1..], target_name, assignment);
+        }
+    }
+
+    fn generate_assignments(&self) -> Vec<TokenStream> {
+        let mut assignments = Vec::new();
+        
+        // Sort by field name for deterministic output
+        let mut sorted_fields: Vec<_> = self.fields.iter().collect();
+        sorted_fields.sort_by(|a, b| a.0.cmp(b.0));
+
+        for (field_name, node) in sorted_fields {
+            let field_ident = Ident::new(field_name, Span::call_site());
+            let type_ident = Ident::new(&node.type_name, Span::call_site());
+            
+            let field_assignments = node.generate_field_assignments();
+            
+            assignments.push(quote! {
+                #field_ident: #type_ident {
+                    #(#field_assignments,)*
+                    ..Default::default()
+                },
+            });
+        }
+        
+        assignments
+    }
+}
+
+impl NestedNode {
+    fn add_nested_field(&mut self, path: &[NestedFieldPath], target_name: Ident, assignment: TokenStream) {
+        if path.is_empty() {
+            return;
+        }
+
+        let first = &path[0];
+        let child = self.nested_children
+            .entry(first.field_name.clone())
+            .or_insert_with(|| NestedNode {
+                type_name: first.type_name.clone(),
+                direct_fields: Vec::new(),
+                nested_children: HashMap::new(),
+            });
+
+        if path.len() == 1 {
+            child.direct_fields.push((target_name, assignment));
+        } else {
+            child.add_nested_field(&path[1..], target_name, assignment);
+        }
+    }
+
+    fn generate_field_assignments(&self) -> Vec<TokenStream> {
+        let mut assignments = Vec::new();
+        
+        // Add direct field assignments
+        for (field_name, assignment) in &self.direct_fields {
+            assignments.push(quote! {
+                #field_name: #assignment
+            });
+        }
+        
+        // Add nested struct assignments
+        let mut sorted_children: Vec<_> = self.nested_children.iter().collect();
+        sorted_children.sort_by(|a, b| a.0.cmp(b.0));
+        
+        for (child_field_name, child_node) in sorted_children {
+            let child_field_ident = Ident::new(child_field_name, Span::call_site());
+            let child_type_ident = Ident::new(&child_node.type_name, Span::call_site());
+            
+            let child_assignments = child_node.generate_field_assignments();
+            
+            assignments.push(quote! {
+                #child_field_ident: #child_type_ident {
+                    #(#child_assignments,)*
+                    ..Default::default()
+                }
+            });
+        }
+        
+        assignments
+    }
+}
+
+fn parse_nested_field_path(nested_field: &str, nested_type: &str) -> Vec<NestedFieldPath> {
+    // Handle dot-separated paths like "level1.level2.level3"
+    if nested_field.contains('.') {
+        let parts: Vec<&str> = nested_field.split('.').collect();
+        let mut path = Vec::new();
+        
+        for (i, part) in parts.iter().enumerate() {
+            let (field_name, type_name) = if part.contains(':') {
+                let type_parts: Vec<&str> = part.splitn(2, ':').collect();
+                (type_parts[0].to_string(), type_parts[1].to_string())
+            } else if i == 0 && !nested_type.is_empty() {
+                // Use nested_type for the first level if provided
+                (part.to_string(), nested_type.to_string())
+            } else {
+                // Fallback to capitalization heuristic
+                let mut chars: Vec<char> = part.chars().collect();
+                if !chars.is_empty() {
+                    chars[0] = chars[0].to_uppercase().next().unwrap_or(chars[0]);
+                }
+                let inferred_type = chars.into_iter().collect::<String>();
+                (part.to_string(), inferred_type)
+            };
+            
+            path.push(NestedFieldPath { field_name, type_name });
+        }
+        
+        path
+    } else {
+        // Handle single level (existing behavior)
+        let (field_name, type_name) = if nested_field.contains(':') {
+            let parts: Vec<&str> = nested_field.splitn(2, ':').collect();
+            (parts[0].to_string(), parts[1].to_string())
+        } else if !nested_type.is_empty() {
+            (nested_field.to_string(), nested_type.to_string())
+        } else {
+            // Fallback to simple capitalization heuristic
+            let mut chars: Vec<char> = nested_field.chars().collect();
+            if !chars.is_empty() {
+                chars[0] = chars[0].to_uppercase().next().unwrap_or(chars[0]);
+            }
+            let inferred_type = chars.into_iter().collect::<String>();
+            (nested_field.to_string(), inferred_type)
+        };
+        
+        vec![NestedFieldPath { field_name, type_name }]
+    }
+}
+
 #[derive(Debug)]
 pub struct DeriveIntoContext {
     name: Ident,
@@ -313,8 +488,7 @@ impl DeriveIntoContext {
     // 比如：#field_name: self.#field_name.take().ok_or(" xxx need to be set!")
     fn gen_into_assigns(&self, struct_name: String) -> Vec<TokenStream> {
         let mut regular_fields = Vec::new();
-        let mut nested_fields: HashMap<String, (String, Vec<(Ident, TokenStream)>)> =
-            HashMap::new();
+        let mut nested_structure = NestedStructure::new();
 
         // First pass: collect all fields and separate regular from nested
         for fd in &self.fields {
@@ -366,28 +540,14 @@ impl DeriveIntoContext {
             };
 
             if !opts.nested_field.is_empty() {
-                // Parse nested_field to extract field name and optional type
-                let (field_name, type_name) = if opts.nested_field.contains(':') {
-                    let parts: Vec<&str> = opts.nested_field.splitn(2, ':').collect();
-                    (parts[0].to_string(), parts[1].to_string())
-                } else if !opts.nested_type.is_empty() {
-                    (opts.nested_field.clone(), opts.nested_type.clone())
-                } else {
-                    // Fallback to simple capitalization heuristic
-                    let mut chars: Vec<char> = opts.nested_field.chars().collect();
-                    if !chars.is_empty() {
-                        chars[0] = chars[0].to_uppercase().next().unwrap_or(chars[0]);
-                    }
-                    let inferred_type = chars.into_iter().collect::<String>();
-                    (opts.nested_field.clone(), inferred_type)
-                };
-
-                // This field should be nested
-                nested_fields
-                    .entry(field_name.clone())
-                    .or_insert_with(|| (type_name, Vec::new()))
-                    .1
-                    .push((target_name, field_assignment));
+                // Parse nested_field path and validate depth
+                let nested_path = parse_nested_field_path(&opts.nested_field, &opts.nested_type);
+                if nested_path.len() > 3 {
+                    panic!("Nested field depth cannot exceed 3 levels. Found {} levels in '{}'", 
+                           nested_path.len(), opts.nested_field);
+                }
+                
+                nested_structure.add_field(nested_path, target_name, field_assignment);
             } else {
                 // Regular field
                 regular_fields.push(quote! {
@@ -397,33 +557,7 @@ impl DeriveIntoContext {
         }
 
         // Second pass: generate nested struct initializations
-        // Sort the nested fields by name to ensure deterministic output
-        let mut sorted_nested_fields: Vec<_> = nested_fields.into_iter().collect();
-        sorted_nested_fields.sort_by(|a, b| a.0.cmp(&b.0));
-
-        for (nested_struct_name, (type_name, fields)) in sorted_nested_fields {
-            let nested_ident = Ident::new(&nested_struct_name, Span::call_site());
-            let struct_type_ident = Ident::new(&type_name, Span::call_site());
-
-            // Create field assignments for struct literal
-            let field_assignments: Vec<TokenStream> = fields
-                .into_iter()
-                .map(|(field_name, assignment)| {
-                    quote! {
-                        #field_name: #assignment
-                    }
-                })
-                .collect();
-
-            // Use struct literal syntax with the specified or inferred type
-            regular_fields.push(quote! {
-                #nested_ident: #struct_type_ident {
-                    #(#field_assignments,)*
-                    ..Default::default()
-                },
-            });
-        }
-
+        regular_fields.extend(nested_structure.generate_assignments());
         regular_fields
     }
 }
